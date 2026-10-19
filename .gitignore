@@ -1,0 +1,10 @@
+# Bases descargadas y salidas generadas localmente
+salidas/
+.Rhistory
+.RData
+.Rproj.user/
+.Ruserdata
+*.Rproj.user
+.DS_Store
+Thumbs.db
+~$*
