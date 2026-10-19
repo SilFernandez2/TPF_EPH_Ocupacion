@@ -1,49 +1,57 @@
-# Pluriempleo EPH — Buenos Aires (2022–2026)
+# Análisis de la ocupación por sexo — EPH (2022–2026)
 
-Análisis reproducible del pluriempleo de mujeres y varones en cinco aglomerados urbanos: Gran La Plata, Bahía Blanca-Cerri, CABA, Partidos del GBA y Mar del Plata-Batán.
+Este proyecto analiza la evolución de la ocupación de mujeres y varones en cinco aglomerados de Buenos Aires, utilizando los microdatos de la **Encuesta Permanente de Hogares (EPH)** del INDEC.
 
-## Requisitos
-- R instalado (recomendado R 4.4 o superior).
-- Conexión a Internet en la primera ejecución, para descargar paquetes y microdatos del INDEC.
-- Windows, macOS o Linux. Puede ejecutarse desde VS Code, RStudio o terminal.
+Se consideran los **primeros trimestres de cada año, entre 2022 y 2026**, para los siguientes aglomerados: Gran La Plata, Bahía Blanca-Cerri, Ciudad de Buenos Aires, Partidos del GBA y Mar del Plata-Batán.
 
-## Ejecutar
-1. Descargar o clonar el repositorio.
-2. Abrir `01_preparacion_datos.R` en R o VS Code y ejecutarlo con `source("01_preparacion_datos.R")` desde la carpeta del repositorio, **o** ejecutar en una terminal situada en la carpeta del repositorio:
-   ```bash
-   Rscript 01_preparacion_datos.R
-   ```
-3. El script instala paquetes CRAN necesarios si faltan, descarga los primeros trimestres de 2022–2026 con `eph::get_microdata()` y crea `salidas/`.
-4. Abrir `salidas/analisis_muestra_poblacion_pluriempleo_2022_2026.xlsx` para ver muestra y población estimada.
+## ¿Qué analizamos?
 
-> Si la descarga de algún trimestre falla porque la fuente no está disponible, la ejecución se detiene con un mensaje. No se reemplazan datos por valores inventados.
+Se clasifica a la población ocupada en tres categorías:
 
-## Salidas
-- `salidas/eph_general.rds`: microdatos originales descargados (no se publican en GitHub).
-- `salidas/tabla_encuestados.rds`, `tabla_resumen.rds`, `tabla_muestra_total.rds`: tamaños muestrales.
-- `salidas/poblacion_sexo.rds`, `tasa_general_sexo.rds`: población expandida y tasas.
-- `salidas/datos_areas.rds`, `datos_areas_varones.rds`, `datos_areas_sexo.rds`: aportes territoriales.
-- `salidas/datos_tablero.rds`: datos agregados para visualizaciones y tablero.
-- `salidas/analisis_muestra_poblacion_pluriempleo_2022_2026.xlsx`: tablas en hojas separadas.
-- Otras tablas históricas `.rds` y `.xlsx`.
+- **Una ocupación:** personas que declaran tener un solo empleo.
+- **Pluriempleo:** personas que declaran tener más de una ocupación.
+- **Sin clasificar:** personas ocupadas cuya cantidad de ocupaciones no puede determinarse.
 
-Para recalcular descargando nuevamente, cambiar `actualizar_microdatos <- TRUE` en el script.
+Se comparan los porcentajes por sexo, su evolución anual y el aporte de cada aglomerado.
 
-## Cartografía (opcional)
-Para generar `salidas/aglomerados_buenos_aires.geojson`, colocar `aglomerados_eph_json.zip` en la raíz del repositorio antes de ejecutar. El script instalará `sf` si hace falta. Sin ese ZIP, **el análisis tabular se ejecuta igualmente**, pero el GeoJSON no se genera.
+## ¿Cómo se calculan los indicadores?
 
-## Definiciones
-- Ocupados: `ESTADO == 1`.
-- Una ocupación: `PP03C == 1`.
-- Pluriempleo: `PP03C == 2`.
-- Sin clasificar: otros valores de `PP03C` entre ocupados.
-- Sexo según `CH04`: 1 varones, 2 mujeres.
-- `encuestados`: registros de la muestra, sin expandir.
-- `poblacion_estimada`: suma del ponderador `PONDERA`.
-- Tasa de pluriempleo: pluriempleados estimados / ocupados estimados del mismo sexo y territorio.
-- Aporte territorial: pluriempleados estimados del territorio / ocupados estimados del mismo sexo en los cinco aglomerados.
+Se utiliza el ponderador `PONDERA` de la EPH para estimar la población representada por las personas encuestadas.
 
-Fuente: INDEC, Encuesta Permanente de Hogares, primeros trimestres 2022–2026.
+**Tasa por categoría (%):**
 
-## Publicación
-Se excluye `salidas/` mediante `.gitignore` porque contiene archivos descargados y resultados reproducibles. Los scripts y documentación sí se publican.
+Población estimada de la categoría / Total de población ocupada estimada del mismo sexo × 100.
+
+**Variación anual (puntos porcentuales):**
+
+Tasa del año actual − Tasa del año anterior.
+
+**Aporte de un aglomerado (puntos porcentuales):**
+
+Población estimada de una categoría en el aglomerado / Total de población ocupada estimada del mismo sexo en los cinco aglomerados × 100.
+
+La suma de los aportes territoriales equivale a la tasa general de esa categoría para el sexo y año correspondientes.
+
+## ¿Cómo ejecutar el proyecto?
+
+1. Descargar o clonar este repositorio y abrir su carpeta en RStudio o VS Code.
+2. Ejecutar los scripts en este orden:
+
+```r
+source("01_preparacion_datos.R")
+source("02_visualizaciones.R")
+```
+
+El primer script instala los paquetes necesarios, descarga los microdatos de la EPH, procesa la información y genera las tablas.
+
+El segundo utiliza esas tablas para crear los gráficos de composición ocupacional, evolución por sexo y aportes territoriales.
+
+Los resultados se guardan automáticamente en la carpeta `salidas/`, incluyendo tablas Excel, archivos RDS y visualizaciones.
+
+Para volver a descargar los microdatos, configurar `actualizar_microdatos <- TRUE` en el primer script.
+
+## Fuente
+
+**INDEC — Encuesta Permanente de Hogares (EPH).** Microdatos individuales correspondientes al primer trimestre de 2022, 2023, 2024, 2025 y 2026.
+
+Los resultados son estimaciones basadas en una encuesta y no corresponden a un censo poblacional.
