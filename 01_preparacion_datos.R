@@ -365,8 +365,8 @@ writexl::write_xlsx(
   file.path(salidas, "analisis_muestra_poblacion_pluriempleo_2022_2026.xlsx")
 )
 
-# 12. CARTOGRAFIA: SI ESTA EL ZIP ORIGINAL, GENERAR GEOJSON DE AGLOMERADOS
-# Requiere sf y el archivo aglomerados_eph_json.zip en la carpeta del proyecto.
+# 12. CARTOGRAFIA: GENERAR GEOJSON DE AGLOMERADOS
+# Requiere sf y  aglomerados_eph_json.zip que esta en el proyecto.
 archivo_zip <- file.path(carpeta, "aglomerados_eph_json.zip")
 if (file.exists(archivo_zip)) {
   if (!requireNamespace("sf", quietly = TRUE)) {
