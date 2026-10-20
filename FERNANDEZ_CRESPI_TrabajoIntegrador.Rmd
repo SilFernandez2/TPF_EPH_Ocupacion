@@ -1,0 +1,288 @@
+---
+title: "Análisis de la ocupación por sexo - EPH (2022–2026)"
+author: "Silvia Fernández y Sol Crespi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r paquetes, include=FALSE}
+paquetes <- c('eph', 'dplyr', 'tidyr', 'writexl', 'ggplot2', 'plotly', 'viridisLite')
+faltantes <- paquetes[!vapply(paquetes, requireNamespace, logical(1), quietly = TRUE)]
+if (length(faltantes)) {
+  message("Instalando paquetes necesarios: ", paste(faltantes, collapse = ", "))
+  install.packages(faltantes, repos = "https://cloud.r-project.org")
+}
+suppressPackageStartupMessages({
+  library(eph); library(dplyr); library(tidyr); library(writexl)
+  library(ggplot2); library(plotly)
+})
+```
+
+```{r descarga-datos, include=FALSE}
+# 1. DESCARGA / RECUPERACION DE MICRODATOS
+# Si ya existe el RDS, no vuelve a descargar. Para actualizar, poné TRUE.
+actualizar_microdatos <- FALSE
+dir.create("salidas", showWarnings = FALSE)
+ruta_eph <- file.path("salidas", 'eph_general.rds')
+if (!actualizar_microdatos && file.exists(ruta_eph)) {
+  eph_general <- readRDS(ruta_eph)
+} else {
+  eph_general <- dplyr::bind_rows(lapply(2022:2026, function(anio) {
+    message('Descargando EPH: primer trimestre ', anio)
+    tryCatch(
+      eph::get_microdata(year = anio, trimester = 1, type = 'individual'),
+      error = function(e) stop(
+        "No se pudo descargar la EPH del primer trimestre de ", anio,
+        ". Verificá la conexión y disponibilidad en INDEC. Detalle: ",
+        conditionMessage(e), call. = FALSE
+      )
+    )
+  }))
+  saveRDS(eph_general, ruta_eph)
+}
+stopifnot(all(c('ANO4', 'TRIMESTRE', 'AGLOMERADO', 'ESTADO', 'PP03C', 'PP03D', 'CH04', 'PONDERA') %in% names(eph_general)))
+stopifnot(all(2022:2026 %in% unique(eph_general$ANO4)))
+```
+
+```{r filtro-clasificacion, include=FALSE}
+# 2. AGLOMERADOS Y CLASIFICACION
+nombres_aglomerados <- c(
+  '2' = 'Gran La Plata', '3' = 'Bahía Blanca-Cerri',
+  '32' = 'CABA', '33' = 'Partidos del GBA',
+  '34' = 'Mar del Plata-Batán'
+)
+base_ba <- eph_general %>%
+  filter(ANO4 %in% 2022:2026, TRIMESTRE == 1,
+         as.character(AGLOMERADO) %in% names(nombres_aglomerados),
+         ESTADO %in% c(1, 2, 3)) %>%
+  mutate(
+    nombre = unname(nombres_aglomerados[as.character(AGLOMERADO)]),
+    anio = as.integer(ANO4),
+    trimestre = paste0(TRIMESTRE, '_', ANO4),
+    categoria = case_when(
+      PP03C == 1 & ESTADO == 1 ~ 'Una ocupación',
+      PP03C == 2 & ESTADO == 1 ~ 'Pluriempleo',
+      ESTADO == 1 ~ 'Sin clasificar',
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+```{r tablas-sexo, include=FALSE}
+# TAMAÑOS MUESTRALES Y POBLACION EXPANDIDA POR SEXO Y CATEGORIA
+# 'encuestados' = registros de la muestra; 'poblacion_estimada' = suma de PONDERA.
+# No confundir la población expandida con la cantidad de encuestados.
+tabla_encuestados <- base_ba %>%
+  filter(ESTADO == 1, CH04 %in% c(1, 2)) %>%
+  mutate(sexo = if_else(CH04 == 1, "Varones", "Mujeres")) %>%
+  group_by(anio, AGLOMERADO, nombre, sexo, categoria) %>%
+  summarise(
+    encuestados = n(),
+    poblacion_estimada = sum(PONDERA, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(anio, AGLOMERADO, sexo, categoria)
+
+# Paleta viridis categórica. Se corta antes del amarillo (end < 1)
+# para que los textos de color se lean sobre fondo blanco.
+colores_sexo <- setNames(viridisLite::viridis(2, end = .6),
+                         c('Mujeres', 'Varones'))
+colores_categoria <- setNames(viridisLite::viridis(3, end = .8),
+                              c('Una ocupación', 'Pluriempleo', 'Sin clasificar'))
+# Color del texto dentro de cada barra: blanco sobre los tonos oscuros.
+colores_texto_categoria <- c('Una ocupación' = 'white',
+                             'Pluriempleo' = 'white',
+                             'Sin clasificar' = '#252525')
+colores_aglomerados <- c('Partidos del GBA' = '#E76BF3',
+                         'CABA' = '#A3A500',
+                         'Gran La Plata' = '#00BF7D',
+                         'Mar del Plata-Batán' = '#00B0F6',
+                         'Bahía Blanca-Cerri' = '#F8766D')
+orden_aglomerados <- names(colores_aglomerados)
+orden_categoria <- names(colores_categoria)
+
+# La muestra y la expansión se calculan para cada categoría y sexo.
+# Tasas: numerador categoría / denominador ocupados del mismo sexo y territorio.
+# Las tasas generales usan sumas de población, NO promedios simples de tasas.
+base <- tabla_encuestados %>%
+  group_by(anio, sexo, categoria) %>%
+  summarise(muestra_categoria = sum(encuestados),
+            poblacion_categoria = sum(poblacion_estimada), .groups = 'drop') %>%
+  group_by(anio, sexo) %>%
+  mutate(muestra_ocupados = sum(muestra_categoria),
+         poblacion_ocupada = sum(poblacion_categoria),
+         porcentaje = 100 * poblacion_categoria / poblacion_ocupada) %>%
+  ungroup() %>%
+  arrange(categoria, sexo, anio) %>%
+  group_by(sexo, categoria) %>%
+  mutate(variacion_anual_pp = porcentaje - lag(porcentaje)) %>%
+  ungroup()
+stopifnot(nrow(base) == 30)
+control_composicion <- base %>%
+  group_by(anio, sexo) %>%
+  summarise(total_pct = sum(porcentaje), .groups = 'drop')
+stopifnot(all(abs(control_composicion$total_pct - 100) < 1e-8))
+```
+
+```{r tasa-aglomerado, include=FALSE}
+# TASAS PONDERADAS Y PARTICIPACION DE CADA SEXO EN CADA AGLOMERADO
+poblacion_sexo <- tabla_encuestados %>%
+  group_by(anio, AGLOMERADO, nombre, sexo) %>%
+  summarise(
+    muestra_ocupados = sum(encuestados),
+    poblacion_ocupada_estimada = sum(poblacion_estimada),
+    poblacion_pluriempleada_estimada =
+      sum(poblacion_estimada[categoria == "Pluriempleo"]),
+    muestra_pluriempleo = sum(encuestados[categoria == "Pluriempleo"]),
+    .groups = "drop"
+  ) %>%
+  mutate(tasa_pluriempleo_pct =
+           100 * poblacion_pluriempleada_estimada / poblacion_ocupada_estimada) %>%
+  group_by(anio, AGLOMERADO) %>%
+  mutate(
+    poblacion_ocupada_ambos_sexos = sum(poblacion_ocupada_estimada),
+    participacion_sexo_en_ocupados_pct =
+      100 * poblacion_ocupada_estimada / poblacion_ocupada_ambos_sexos
+  ) %>%
+  ungroup()
+```
+
+```{r grafico-composicion, warning=FALSE, message=FALSE, fig.width=11, fig.height=6}
+# BARRAS APILADAS: composición por sexo de un año.
+composicion <- base %>%
+  mutate(sexo = factor(sexo, levels = c('Varones', 'Mujeres')),
+         categoria = factor(categoria, levels = orden_categoria),
+         etiqueta = ifelse(porcentaje >= 3, sprintf('%.1f%%', porcentaje), ''))
+
+grafico_composicion_anio <- function(anio_elegido) {
+  ggplot(filter(composicion, anio == anio_elegido),
+         aes(x = sexo, y = porcentaje, fill = categoria)) +
+    geom_col(width = .62, color = 'white') +
+    geom_text(aes(label = etiqueta, color = categoria),
+              position = position_stack(vjust = .5), size = 4,
+              show.legend = FALSE) +
+    coord_flip() +
+    scale_fill_manual(values = colores_categoria, drop = FALSE) +
+    scale_color_manual(values = colores_texto_categoria, guide = 'none') +
+    scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 20),
+                       labels = function(x) paste0(x, '%'),
+                       expand = expansion(mult = c(0, 0))) +
+    labs(title = paste('Composición ocupacional por sexo |', anio_elegido),
+         subtitle = 'Cinco aglomerados de Buenos Aires | Primer trimestre',
+         x = NULL, y = 'Porcentaje de personas ocupadas',
+         fill = 'Categoría ocupacional',
+         caption = 'Fuente: INDEC - EPH | Estimaciones ponderadas con PONDERA') +
+    theme_minimal(base_size = 13) +
+    theme(plot.title = element_text(face = 'bold'), legend.position = 'bottom',
+          panel.grid.major.y = element_blank())
+}
+grafico_composicion_anio(2026)
+```
+
+```{r lineas-funcion, include=FALSE}
+# LINEAS INTERACTIVAS CON TOOLTIP: una por categoría.
+# El tooltip incluye tasa, muestra, población expandida y cambio anual.
+formatear_entero <- function(x) format(round(x), big.mark = '.', decimal.mark = ',', trim = TRUE, scientific = FALSE)
+formatear_pct <- function(x) formatC(x, format = 'f', digits = 1, decimal.mark = ',')
+
+lineas_interactivas <- function(cat) {
+  df <- base %>% filter(categoria == cat) %>%
+    mutate(sexo = factor(sexo, levels = c('Mujeres', 'Varones')),
+           tooltip = paste0('<b>Año:</b> ', anio,
+                            '<br><b>Sexo:</b> ', sexo,
+                            '<br><b>Categoría:</b> ', categoria,
+                            '<br><b>Porcentaje:</b> ', formatear_pct(porcentaje), '%',
+                            '<br><b>Variación interanual:</b> ',
+                            ifelse(is.na(variacion_anual_pp), 'Año base',
+                                   paste0(ifelse(variacion_anual_pp > 0, '+', ''),
+                                          formatear_pct(variacion_anual_pp), ' pp')),
+                            '<br><b>Encuestados en categoría:</b> ', formatear_entero(muestra_categoria),
+                            '<br><b>Población estimada en categoría:</b> ', formatear_entero(poblacion_categoria),
+                            '<br><b>Población ocupada estimada del sexo:</b> ', formatear_entero(poblacion_ocupada),
+                            '<br><b>Período:</b> Primer trimestre',
+                            '<br><b>Fuente:</b> INDEC - EPH'))
+  gg <- ggplot(df, aes(anio, porcentaje, color = sexo, group = sexo)) +
+    geom_line(linewidth = 1.4) +
+    geom_point(aes(text = tooltip), size = 4.5) +
+    scale_color_manual(values = colores_sexo) +
+    scale_x_continuous(breaks = 2022:2026) +
+    scale_y_continuous(labels = function(x) paste0(x, '%')) +
+    expand_limits(y = 0) +
+    labs(x = NULL, y = '% de ocupados del mismo sexo', color = NULL) +
+    theme_minimal(base_size = 12) +
+    theme(panel.grid.minor = element_blank())
+  # plotly no muestra el subtítulo ni el caption de ggplot: se agregan en layout().
+  ggplotly(gg, tooltip = 'text') %>%
+    layout(hovermode = 'closest',
+           title = list(text = paste0('<b>Evolución de ', tolower(cat), ' por sexo</b>',
+                                      '<br><sup>Cinco aglomerados de Buenos Aires | ',
+                                      'Primer trimestre 2022-2026</sup>'),
+                        x = 0, xanchor = 'left', y = .97),
+           legend = list(orientation = 'h', x = .5, xanchor = 'center', y = -.12),
+           margin = list(t = 80, b = 90),
+           annotations = list(text = 'Fuente: INDEC - EPH | Datos ponderados con PONDERA',
+                              showarrow = FALSE, xref = 'paper', yref = 'paper',
+                              x = 1, xanchor = 'right', y = -.28,
+                              font = list(size = 11, color = '#666666')))
+}
+```
+
+```{r linea-pluriempleo, warning=FALSE, message=FALSE}
+lineas_interactivas('Pluriempleo')
+```
+
+```{r linea-una-ocupacion, warning=FALSE, message=FALSE}
+lineas_interactivas('Una ocupación')
+```
+
+```{r brecha-tasa-aglomerado, warning=FALSE, message=FALSE, fig.width=11, fig.height=6}
+# PUNTOS UNIDOS: BRECHA DE PLURIEMPLEO ENTRE SEXOS POR AGLOMERADO
+# El largo de la línea es la brecha (mujeres - varones) en puntos porcentuales.
+anio_brecha <- 2026
+datos_puntos <- poblacion_sexo %>%
+  filter(anio == anio_brecha) %>%
+  select(nombre, sexo, tasa_pluriempleo_pct, muestra_pluriempleo)
+
+datos_brecha <- datos_puntos %>%
+  select(nombre, sexo, tasa_pluriempleo_pct) %>%
+  pivot_wider(names_from = sexo, values_from = tasa_pluriempleo_pct) %>%
+  mutate(brecha_pp = Mujeres - Varones,
+         etiqueta_brecha = paste0(ifelse(brecha_pp > 0, '+', ''),
+                                  formatear_pct(brecha_pp), ' pp'))
+
+orden_brecha <- datos_brecha %>% arrange(brecha_pp) %>% pull(nombre)
+datos_puntos <- datos_puntos %>%
+  mutate(nombre = factor(nombre, levels = orden_brecha),
+         etiqueta = paste0(formatear_pct(tasa_pluriempleo_pct), '%\n(n=',
+                           muestra_pluriempleo, ')'))
+datos_brecha <- datos_brecha %>%
+  mutate(nombre = factor(nombre, levels = orden_brecha))
+x_max <- max(datos_puntos$tasa_pluriempleo_pct) * 1.25
+
+ggplot() +
+  geom_segment(data = datos_brecha,
+               aes(x = Varones, xend = Mujeres, y = nombre, yend = nombre),
+               color = '#B8BEC8', linewidth = 2.2) +
+  geom_point(data = datos_puntos,
+             aes(x = tasa_pluriempleo_pct, y = nombre, color = sexo), size = 5) +
+  geom_text(data = datos_puntos,
+            aes(x = tasa_pluriempleo_pct, y = nombre, label = etiqueta, color = sexo),
+            vjust = -.6, size = 3.3, lineheight = .9, show.legend = FALSE) +
+  geom_text(data = datos_brecha,
+            aes(x = x_max, y = nombre, label = etiqueta_brecha),
+            hjust = 1, size = 3.8, fontface = 'bold', color = '#252525') +
+  scale_color_manual(values = colores_sexo, breaks = c('Mujeres', 'Varones')) +
+  scale_x_continuous(limits = c(0, x_max), labels = function(x) paste0(x, '%')) +
+  scale_y_discrete(expand = expansion(add = c(.5, .9))) +
+  labs(title = paste('Brecha de pluriempleo entre mujeres y varones por aglomerado |', anio_brecha),
+       subtitle = 'Tasa de pluriempleo: pluriempleados / ocupados del mismo sexo y aglomerado | Primer trimestre\nA la derecha, brecha en puntos porcentuales (mujeres - varones)',
+       x = 'Porcentaje de ocupados con más de una ocupación', y = NULL, color = NULL,
+       caption = 'Fuente: INDEC - EPH | Estimaciones ponderadas con PONDERA\nn = pluriempleados encuestados') +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = 'bold'), legend.position = 'top',
+        panel.grid.minor = element_blank(), panel.grid.major.y = element_blank())
+```
