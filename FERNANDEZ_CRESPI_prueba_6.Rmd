@@ -1,0 +1,623 @@
+---
+title: "Ocupación y pluriempleo por sexo en cinco aglomerados de Buenos Aires"
+subtitle: "Un análisis de la composición ocupacional, su evolución y las brechas entre mujeres y varones durante el primer trimestre de 2022–2026"
+author: "Silvia Fernández y María Sol Crespi"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r paquetes, include=FALSE}
+paquetes <- c('eph', 'dplyr', 'tidyr', 'writexl', 'ggplot2', 'plotly', 'viridisLite')
+faltantes <- paquetes[!vapply(paquetes, requireNamespace, logical(1), quietly = TRUE)]
+if (length(faltantes)) {
+  message("Instalando paquetes necesarios: ", paste(faltantes, collapse = ", "))
+  install.packages(faltantes, repos = "https://cloud.r-project.org")
+}
+suppressPackageStartupMessages({
+  library(eph); library(dplyr); library(tidyr); library(writexl)
+  library(ggplot2); library(plotly)
+})
+```
+
+```{r descarga-datos, include=FALSE}
+# 1. DESCARGA / RECUPERACION DE MICRODATOS
+# Si ya existe el RDS, no vuelve a descargar. Para actualizar, poné TRUE.
+actualizar_microdatos <- FALSE
+
+dir.create("salidas", showWarnings = FALSE)
+
+ruta_eph <- file.path("salidas", "eph_general.rds")
+if (!actualizar_microdatos && file.exists(ruta_eph)) {   # <- esto te faltaba
+  eph_general <- readRDS(ruta_eph)                       # <- y esto
+} else {                                                 # <- el else va pegado a la }
+  eph_general <- dplyr::bind_rows(lapply(2022:2026, function(anio) {
+    message('Descargando EPH: primer trimestre ', anio)
+    tryCatch(
+      eph::get_microdata(year = anio, trimester = 1, type = 'individual'),
+      error = function(e) stop(
+        "No se pudo descargar la EPH del primer trimestre de ", anio,
+        ". Verificá la conexión y disponibilidad en INDEC. Detalle: ",
+        conditionMessage(e), call. = FALSE
+      )
+    )
+  }))
+  saveRDS(eph_general, ruta_eph)
+}   
+
+stopifnot(all(c('ANO4', 'TRIMESTRE', 'AGLOMERADO', 'ESTADO', 'PP03C', 'PP03D', 'CH04', 'PONDERA') %in% names(eph_general)))
+stopifnot(all(2022:2026 %in% unique(eph_general$ANO4)))
+```
+
+```{r filtro-clasificacion, include=FALSE}
+# 2. AGLOMERADOS Y CLASIFICACION
+nombres_aglomerados <- c(
+  '2' = 'Gran La Plata', '3' = 'Bahía Blanca-Cerri',
+  '32' = 'CABA', '33' = 'Partidos del GBA',
+  '34' = 'Mar del Plata-Batán'
+)
+base_ba <- eph_general %>%
+  filter(ANO4 %in% 2022:2026, TRIMESTRE == 1,
+         as.character(AGLOMERADO) %in% names(nombres_aglomerados),
+         ESTADO %in% c(1, 2, 3)) %>%
+  mutate(
+    nombre = unname(nombres_aglomerados[as.character(AGLOMERADO)]),
+    anio = as.integer(ANO4),
+    trimestre = paste0(TRIMESTRE, '_', ANO4),
+    categoria = case_when(
+      PP03C == 1 & ESTADO == 1 ~ 'Una ocupación',
+      PP03C == 2 & ESTADO == 1 ~ 'Pluriempleo',
+      ESTADO == 1 ~ 'Sin clasificar',
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+```{r tablas-sexo, include=FALSE}
+# TAMAÑOS MUESTRALES Y POBLACION EXPANDIDA POR SEXO Y CATEGORIA
+# 'encuestados' = registros de la muestra; 'poblacion_estimada' = suma de PONDERA.
+# No confundir la población expandida con la cantidad de encuestados.
+tabla_encuestados <- base_ba %>%
+  filter(ESTADO == 1, CH04 %in% c(1, 2)) %>%
+  mutate(sexo = if_else(CH04 == 1, "Varones", "Mujeres")) %>%
+  group_by(anio, AGLOMERADO, nombre, sexo, categoria) %>%
+  summarise(
+    encuestados = n(),
+    poblacion_estimada = sum(PONDERA, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(anio, AGLOMERADO, sexo, categoria)
+
+# Paletas coherentes: sexo y categoría representan dimensiones distintas.
+colores_sexo <- c('Mujeres' = '#008C68', 'Varones' = '#E66A19')
+colores_categoria <- c('Una ocupación' = '#420052',
+                       'Pluriempleo' = '#287F94',
+                       'Sin clasificar' = '#76D34B')
+colores_texto_categoria <- c('Una ocupación' = 'white',
+                             'Pluriempleo' = 'white',
+                             'Sin clasificar' = '#252525')
+colores_aglomerados <- c('Partidos del GBA' = '#E76BF3',
+                         'CABA' = '#A3A500',
+                         'Gran La Plata' = '#00BF7D',
+                         'Mar del Plata-Batán' = '#00B0F6',
+                         'Bahía Blanca-Cerri' = '#F8766D')
+orden_aglomerados <- names(colores_aglomerados)
+orden_categoria <- names(colores_categoria)
+
+# La muestra y la expansión se calculan para cada categoría y sexo.
+# Tasas: numerador categoría / denominador ocupados del mismo sexo y territorio.
+# Las tasas generales usan sumas de población, NO promedios simples de tasas.
+base <- tabla_encuestados %>%
+  group_by(anio, sexo, categoria) %>%
+  summarise(muestra_categoria = sum(encuestados),
+            poblacion_categoria = sum(poblacion_estimada), .groups = 'drop') %>%
+  group_by(anio, sexo) %>%
+  mutate(muestra_ocupados = sum(muestra_categoria),
+         poblacion_ocupada = sum(poblacion_categoria),
+         porcentaje = 100 * poblacion_categoria / poblacion_ocupada) %>%
+  ungroup() %>%
+  arrange(categoria, sexo, anio) %>%
+  group_by(sexo, categoria) %>%
+  mutate(variacion_anual_pp = porcentaje - lag(porcentaje)) %>%
+  ungroup()
+stopifnot(nrow(base) == 30)
+control_composicion <- base %>%
+  group_by(anio, sexo) %>%
+  summarise(total_pct = sum(porcentaje), .groups = 'drop')
+stopifnot(all(abs(control_composicion$total_pct - 100) < 1e-8))
+```
+
+```{r tasa-aglomerado, include=FALSE}
+# TASAS PONDERADAS Y PARTICIPACION DE CADA SEXO EN CADA AGLOMERADO
+poblacion_sexo <- tabla_encuestados %>%
+  group_by(anio, AGLOMERADO, nombre, sexo) %>%
+  summarise(
+    muestra_ocupados = sum(encuestados),
+    poblacion_ocupada_estimada = sum(poblacion_estimada),
+    poblacion_pluriempleada_estimada =
+      sum(poblacion_estimada[categoria == "Pluriempleo"]),
+    muestra_pluriempleo = sum(encuestados[categoria == "Pluriempleo"]),
+    .groups = "drop"
+  ) %>%
+  mutate(tasa_pluriempleo_pct =
+           100 * poblacion_pluriempleada_estimada / poblacion_ocupada_estimada) %>%
+  group_by(anio, AGLOMERADO) %>%
+  mutate(
+    poblacion_ocupada_ambos_sexos = sum(poblacion_ocupada_estimada),
+    participacion_sexo_en_ocupados_pct =
+      100 * poblacion_ocupada_estimada / poblacion_ocupada_ambos_sexos
+  ) %>%
+  ungroup()
+```
+
+```{r valores-texto, include=FALSE}
+# Valores que se citan en el texto: salen de la tabla 'base', no se escriben a mano.
+pct_texto <- function(a, s, cat) {
+  valor <- base$porcentaje[base$anio == a & base$sexo == s & base$categoria == cat]
+  formatC(valor, format = 'f', digits = 1, decimal.mark = ',')
+}
+```
+
+## **1\. Introducción**
+
+El trabajo ocupa un lugar central en la organización económica y social de la población. Sin embargo, la condición de estar ocupado no implica necesariamente una única forma de inserción laboral. Una persona puede desarrollar una sola actividad o combinar dos o más ocupaciones, situaciones que pueden responder a distintas características del mercado de trabajo y a circunstancias individuales.
+
+En Argentina, la Encuesta Permanente de Hogares (EPH), elaborada por el Instituto Nacional de Estadística y Censos (INDEC), constituye una de las principales fuentes para estudiar estas características. A partir de información relevada en hogares, permite analizar la participación de la población en el mercado laboral y describir distintas dimensiones de la ocupación.
+
+Este informe propone explorar la composición de la población ocupada según la cantidad de ocupaciones que desempeña, incorporando dos dimensiones de análisis: el sexo y el territorio.
+
+La pregunta inicial que orienta el trabajo es:
+
+**¿Cómo se distribuye y evoluciona la población ocupada según la cantidad de ocupaciones y el sexo, y en qué medida estas diferencias se reproducen entre los principales aglomerados urbanos de Buenos Aires?**
+
+Para abordarla, se parte de una descripción general de la composición ocupacional. Luego se examina la evolución de las personas con una ocupación y con más de una ocupación. Finalmente, se incorporan las brechas entre mujeres y varones para identificar diferencias territoriales que podrían quedar ocultas en los resultados agregados.
+
+El propósito es descriptivo y exploratorio: reconocer patrones, formular nuevas preguntas y establecer los alcances de las comparaciones, sin atribuir causas que los datos analizados no permiten identificar.
+
+## **2\. Fuente, período y cobertura**
+
+La fuente utilizada son los microdatos individuales de la **Encuesta Permanente de Hogares (EPH)**, correspondientes al primer trimestre de cada año entre 2022 y 2026\.
+
+La selección de un mismo trimestre busca mejorar la comparabilidad temporal, evitando contrastar períodos distintos del año que podrían presentar comportamientos estacionales.
+
+El análisis comprende cinco aglomerados urbanos:
+
+* Ciudad Autónoma de Buenos Aires (CABA).
+* Partidos del Gran Buenos Aires.
+* Gran La Plata.
+* Bahía Blanca-Cerri.
+* Mar del Plata-Batán.
+
+Estos territorios permiten observar diferentes realidades urbanas dentro de Buenos Aires, aunque no constituyen la totalidad de la provincia ni representan por sí solos al conjunto del país.
+
+La unidad de observación es la persona relevada por la encuesta. Para este trabajo, el universo principal está integrado por las personas clasificadas como **ocupadas**, según la definición operativa de la EPH.
+
+## **3\. Universos, variables e indicadores**
+
+La EPH considera ocupadas, en términos generales, a las personas que durante el período de referencia realizaron alguna actividad laboral durante al menos una hora, así como a determinadas personas que, teniendo una ocupación, estuvieron temporalmente ausentes de ella.
+
+Esta definición resulta importante: estar ocupado no equivale necesariamente a trabajar una jornada completa, disponer de ingresos suficientes o contar con un empleo registrado.
+
+Dentro de la población ocupada se distinguen tres categorías:
+
+**Una ocupación:** personas que declaran desempeñar una única ocupación.
+
+**Pluriempleo:** personas que declaran desempeñar más de una ocupación.
+
+**Sin clasificar:** personas ocupadas para las cuales la variable utilizada no permite asignar alguna de las dos categorías anteriores.
+
+Las variables principales empleadas son `ANO4` (año), `TRIMESTRE` (trimestre), `AGLOMERADO` (aglomerado urbano), `ESTADO` (condición de actividad), `CH04` (sexo), `PP03C` (cantidad de ocupaciones) y `PONDERA` (factor de expansión).
+
+Para estimar la cantidad de personas representadas por los registros muestrales se utiliza el ponderador `PONDERA`. De esta manera, se distingue entre el número de personas efectivamente encuestadas y la población estimada que representan.
+
+La proporción de cada categoría ocupacional se calcula como:
+
+**Tasa de la categoría (%) \= población estimada de la categoría / población ocupada estimada del mismo sexo × 100\.**
+
+En los resultados por aglomerado, tanto el numerador como el denominador corresponden al mismo territorio. Para el agregado de los cinco aglomerados, las tasas se obtienen a partir de las poblaciones estimadas y no del promedio simple de los porcentajes territoriales.
+
+La variación interanual se expresa en **puntos porcentuales (pp)**, calculados como la diferencia entre las tasas de dos años consecutivos.
+
+## **4\. Composición ocupacional por sexo**
+
+```{r grafico-composicion, warning=FALSE, message=FALSE}
+# Composición animada: colores de categoría, porcentajes visibles y controles separados.
+composicion <- base %>%
+  mutate(
+    sexo = factor(sexo, levels = c('Varones', 'Mujeres')),
+    categoria = factor(categoria, levels = orden_categoria),
+    etiqueta = paste0(sprintf('%.1f', porcentaje), '%'),
+    tooltip = paste0(
+      '<b>Año:</b> ', anio,
+      '<br><b>Sexo:</b> ', sexo,
+      '<br><b>Categoría:</b> ', categoria,
+      '<br><b>Porcentaje:</b> ', etiqueta,
+      '<br><b>Población estimada en categoría:</b> ',
+      format(round(poblacion_categoria), big.mark='.', decimal.mark=',', trim=TRUE),
+      '<br><b>Población ocupada estimada:</b> ',
+      format(round(poblacion_ocupada), big.mark='.', decimal.mark=',', trim=TRUE)
+    )
+  )
+
+# La leyenda se dibuja fuera del widget para que no choque con Play y el deslizador.
+# Construimos las barras y una capa de etiquetas independiente.
+# Plotly R puede omitir el texto de las barras durante los cambios de frame;
+# las etiquetas como trazas scatter se actualizan junto con cada año.
+orden_apilado <- c('Pluriempleo', 'Sin clasificar', 'Una ocupación')
+composicion <- composicion %>%
+  mutate(categoria = factor(as.character(categoria), levels = orden_apilado)) %>%
+  arrange(anio, sexo, categoria) %>%
+  group_by(anio, sexo) %>%
+  mutate(centro_segmento = cumsum(porcentaje) - porcentaje / 2) %>%
+  ungroup()
+
+grafico_composicion <- plot_ly(
+  data = composicion,
+  x = ~porcentaje, y = ~sexo,
+  color = ~categoria, colors = colores_categoria,
+  frame = ~anio,
+  type = 'bar', orientation = 'h',
+  hovertext = ~tooltip, hoverinfo = 'text',
+  showlegend = FALSE
+) %>%
+  add_trace(
+    data = composicion,
+    x = ~centro_segmento, y = ~sexo,
+    frame = ~anio,
+    type = 'scatter', mode = 'text',
+    text = ~etiqueta,
+    textfont = list(size = 13, color = '#FFFFFF'),
+    hovertext = ~tooltip, hoverinfo = 'text',
+    showlegend = FALSE, inherit = FALSE
+  ) %>%
+  layout(
+    barmode = 'stack',
+    xaxis = list(title = '% de personas ocupadas por sexo', range = c(0, 100), ticksuffix = '%'),
+    yaxis = list(title = '', categoryorder = 'array', categoryarray = c('Varones', 'Mujeres')),
+    margin = list(l = 85, r = 25, t = 20, b = 105),
+    height = 390
+  ) %>%
+  animation_opts(frame = 1100, transition = 450, redraw = TRUE) %>%
+  animation_slider(currentvalue = list(prefix = 'Año: '))
+
+htmltools::tagList(
+  htmltools::tags$h3(style='font-size:17px;margin:12px 0 2px;',
+                      'Composición ocupacional por sexo'),
+  grafico_composicion,
+  htmltools::tags$div(
+    style='display:flex;justify-content:center;gap:22px;flex-wrap:wrap;font-size:12px;margin:10px 0 5px;',
+    lapply(orden_categoria, function(cat) htmltools::tags$span(
+      htmltools::tags$span(style=paste0('display:inline-block;width:11px;height:11px;margin-right:5px;background:',colores_categoria[[cat]],';')),
+      cat
+    ))
+  ),
+  htmltools::tags$p(style='font-size:11px;color:#666;text-align:right;margin:5px 0 22px;',
+                    'Cinco aglomerados de Buenos Aires | Primer trimestre 2022–2026 · Fuente: INDEC - EPH | PONDERA')
+)
+```
+
+La primera visualización presenta la distribución porcentual de la población ocupada según el sexo y la cantidad de ocupaciones. Su formato animado permite recorrer los años del período y observar cómo cambia la participación relativa de cada categoría.
+
+El rasgo principal es el predominio de las personas que declaran una única ocupación, tanto entre mujeres como entre varones. No obstante, la composición difiere entre ambos grupos.
+
+Por ejemplo, en el primer trimestre de 2026, las estimaciones muestran que el `r pct_texto(2026, 'Mujeres', 'Una ocupación')` % de las mujeres ocupadas se encuentra en la categoría de una ocupación, frente al `r pct_texto(2026, 'Varones', 'Una ocupación')` % de los varones. En cambio, el pluriempleo representa el `r pct_texto(2026, 'Mujeres', 'Pluriempleo')` % de las mujeres ocupadas y el `r pct_texto(2026, 'Varones', 'Pluriempleo')` % de los varones.
+
+La categoría sin clasificar también presenta diferencias: alcanza el `r pct_texto(2026, 'Mujeres', 'Sin clasificar')` % entre las mujeres y el `r pct_texto(2026, 'Varones', 'Sin clasificar')` % entre los varones en ese mismo período.
+
+Estos resultados indican que, aunque la ocupación única es mayoritaria en ambos sexos, la distribución interna de las categorías no es idéntica.
+
+Es importante considerar que se trata de una composición porcentual: un aumento de participación de una categoría implica necesariamente una reducción relativa de otra u otras. Por lo tanto, observar una caída en la proporción de personas con una ocupación no permite concluir, por sí solo, que haya disminuido su cantidad absoluta.
+
+Esta primera aproximación conduce a una nueva pregunta: **¿las diferencias observadas responden a una composición relativamente estable o las participaciones cambian a lo largo del período?**
+
+## **5\. Evolución de una ocupación y del pluriempleo**
+
+```{r lineas-funcion, include=FALSE}
+formatear_entero <- function(x) format(round(x), big.mark = '.', decimal.mark = ',', trim = TRUE, scientific = FALSE)
+formatear_pct <- function(x) formatC(x, format = 'f', digits = 1, decimal.mark = ',')
+
+lineas_interactivas <- function(cat) {
+  df <- base %>% filter(categoria == cat) %>%
+    mutate(sexo = factor(sexo, levels = c('Mujeres', 'Varones')),
+           tooltip = paste0('<b>Año:</b> ', anio,
+                            '<br><b>Sexo:</b> ', sexo,
+                            '<br><b>Categoría:</b> ', categoria,
+                            '<br><b>Porcentaje:</b> ', formatear_pct(porcentaje), '%',
+                            '<br><b>Variación interanual:</b> ',
+                            ifelse(is.na(variacion_anual_pp), 'Año base',
+                                   paste0(ifelse(variacion_anual_pp > 0, '+', ''),
+                                          formatear_pct(variacion_anual_pp), ' pp')),
+                            '<br><b>Encuestados en categoría:</b> ', formatear_entero(muestra_categoria),
+                            '<br><b>Población estimada en categoría:</b> ', formatear_entero(poblacion_categoria),
+                            '<br><b>Población ocupada estimada del sexo:</b> ', formatear_entero(poblacion_ocupada),
+                            '<br><b>Período:</b> Primer trimestre'))
+  gg <- ggplot(df, aes(anio, porcentaje, color = sexo, group = sexo)) +
+    geom_line(linewidth = 1.3) +
+    geom_point(aes(text = tooltip), size = 3.5) +
+    scale_color_manual(values = colores_sexo) +
+    scale_x_continuous(breaks = 2022:2026) +
+    scale_y_continuous(limits = if (cat == 'Pluriempleo') c(0, 20) else c(0, 100),
+                       breaks = if (cat == 'Pluriempleo') seq(0, 20, 5) else seq(0, 100, 25),
+                       labels = function(x) paste0(x, '%')) +
+    labs(x = NULL, y = NULL, color = NULL) +
+    theme_minimal(base_size = 11) +
+    theme(panel.grid.minor = element_blank(), legend.position = 'none')
+  ggplotly(gg, tooltip = 'text', height = 335) %>%
+    layout(hovermode = 'closest', showlegend = FALSE,
+           margin = list(l = 45, r = 12, t = 12, b = 45))
+}
+```
+
+```{r evoluciones-paralelas, warning=FALSE, message=FALSE}
+# Títulos y leyenda fuera de Plotly para evitar superposiciones.
+htmltools::tagList(
+  htmltools::tags$h3(style='font-size:17px;margin-bottom:4px;',
+                      'Evolución de las categorías ocupacionales por sexo'),
+  htmltools::tags$p(style='font-size:12px;color:#555;margin-top:0;',
+                    '% de personas ocupadas por sexo · Escalas independientes (ambas desde 0 %)'),
+  htmltools::tags$div(
+    style='display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:22px;align-items:start;',
+    htmltools::tags$div(
+      htmltools::tags$h4(style='font-size:14px;margin:8px 0 0;', 'Pluriempleo'),
+      lineas_interactivas('Pluriempleo')
+    ),
+    htmltools::tags$div(
+      htmltools::tags$h4(style='font-size:14px;margin:8px 0 0;', 'Una ocupación'),
+      lineas_interactivas('Una ocupación')
+    )
+  ),
+  htmltools::tags$div(
+    style='display:flex;justify-content:center;gap:25px;font-size:12px;margin-top:0;',
+    htmltools::tags$span(htmltools::tags$span(style='display:inline-block;background:#008C68;width:18px;height:4px;vertical-align:middle;margin-right:6px;'),'Mujeres'),
+    htmltools::tags$span(htmltools::tags$span(style='display:inline-block;background:#E66A19;width:18px;height:4px;vertical-align:middle;margin-right:6px;'),'Varones')
+  ),
+  htmltools::tags$p(style='font-size:11px;color:#666;text-align:right;margin-top:8px;',
+                    'Cinco aglomerados de Buenos Aires | Primer trimestre 2022–2026 · Fuente: INDEC - EPH | PONDERA')
+)
+```
+
+Para profundizar el análisis se presentan dos gráficos de líneas que permiten comparar, año a año, la participación de mujeres y varones dentro de cada categoría.
+
+La visualización de una ocupación muestra una categoría mayoritaria, cuya participación se mantiene en niveles elevados durante todo el período. Aunque existen cambios interanuales, su evolución relativa resulta menos pronunciada que la observada en el pluriempleo.
+
+Por su parte, el gráfico de pluriempleo permite identificar variaciones en una categoría de menor peso relativo, pero relevante para comprender la diversidad de situaciones ocupacionales.
+
+En ambos casos, la comparación por sexo aporta información adicional. No solo interesa si una categoría aumenta o disminuye, sino también si las trayectorias de mujeres y varones se aproximan, se separan o mantienen diferencias persistentes.
+
+La lectura conjunta requiere una precaución: como las categorías tienen magnitudes muy diferentes, cada gráfico utiliza una escala vertical apropiada. Por ello, la inclinación visual de las líneas no debe utilizarse para comparar directamente la intensidad de los cambios entre ambas categorías. Para hacerlo, corresponde observar las variaciones en puntos porcentuales.
+
+Los resultados agregados permiten describir una tendencia general para los cinco aglomerados considerados. Sin embargo, esa tendencia podría no reproducirse de manera uniforme en todos los territorios.
+
+**¿El comportamiento del pluriempleo y de la ocupación única es semejante en CABA, el Gran Buenos Aires, Gran La Plata, Bahía Blanca-Cerri y Mar del Plata-Batán? ¿Las diferencias entre mujeres y varones mantienen la misma dirección en cada aglomerado?**
+
+Estas preguntas motivan la incorporación de una medida específica de brecha.
+
+## **6\. Brechas por sexo y diferencias territoriales**
+
+```{r brecha-tasa-aglomerado, warning=FALSE, message=FALSE}
+# Dos paneles coordinados con UN selector de año.
+# Izquierda: una ocupación; derecha: pluriempleo.
+# Brecha = tasa de mujeres - tasa de varones (puntos porcentuales).
+orden_territorios <- c('Bahía Blanca-Cerri', 'CABA', 'Partidos del GBA',
+                       'Mar del Plata-Batán', 'Gran La Plata')
+
+# Base territorial ponderada para las dos categorías, por sexo.
+tasas_territorio <- tabla_encuestados %>%
+  group_by(anio, nombre, sexo) %>%
+  mutate(
+    poblacion_ocupada = sum(poblacion_estimada),
+    muestra_ocupados = sum(encuestados)
+  ) %>%
+  ungroup() %>%
+  filter(categoria %in% c('Una ocupación', 'Pluriempleo')) %>%
+  mutate(
+    tasa = 100 * poblacion_estimada / poblacion_ocupada,
+    nombre = factor(nombre, levels = rev(orden_territorios))
+  )
+
+brechas_dos <- tasas_territorio %>%
+  select(anio, nombre, categoria, sexo, tasa) %>%
+  tidyr::pivot_wider(names_from = sexo, values_from = tasa) %>%
+  mutate(
+    brecha_pp = Mujeres - Varones,
+    # Coma decimal, igual que en el texto del informe.
+    etiqueta_brecha = paste0(ifelse(brecha_pp > 0, '+', ''), formatear_pct(brecha_pp), ' pp'),
+    detalle = paste0('<b>', nombre, ' | ', anio, ' | ', categoria, '</b>',
+                     '<br>Mujeres: ', formatear_pct(Mujeres), '%',
+                     '<br>Varones: ', formatear_pct(Varones), '%',
+                     '<br>Brecha (M − V): ', etiqueta_brecha)
+  )
+
+tasas_territorio <- tasas_territorio %>%
+  left_join(brechas_dos %>%
+              select(anio, nombre, categoria, brecha_pp),
+            by = c('anio', 'nombre', 'categoria')) %>%
+  mutate(
+    etiqueta_tasa = paste0(formatear_pct(tasa), '%'),
+    detalle = paste0(
+      '<b>', nombre, ' | ', anio, '</b>',
+      '<br><b>Categoría:</b> ', categoria,
+      '<br><b>Sexo:</b> ', sexo,
+      '<br><b>Tasa:</b> ', etiqueta_tasa,
+      '<br><b>Población estimada en categoría:</b> ',
+      formatear_entero(poblacion_estimada),
+      '<br><b>Población ocupada estimada:</b> ',
+      formatear_entero(poblacion_ocupada),
+      '<br><b>Casos muestrales en categoría:</b> ', encuestados,
+      '<br><b>Brecha mujeres − varones:</b> ',
+      paste0(ifelse(brecha_pp > 0, '+', ''), formatear_pct(brecha_pp), ' pp')
+    )
+  )
+
+anios_brecha <- sort(unique(tasas_territorio$anio))
+
+# Cada panel tiene cinco trazas por año: líneas, mujeres, varones,
+# brechas y una traza invisible auxiliar no necesaria.
+crear_panel_brecha <- function(cat, limite, posicion_brecha) {
+  p <- plotly::plot_ly()
+  for (i in seq_along(anios_brecha)) {
+    a <- anios_brecha[i]
+    b <- dplyr::filter(brechas_dos, anio == a, categoria == cat)
+    mujeres <- dplyr::filter(tasas_territorio, anio == a, categoria == cat, sexo == 'Mujeres')
+    varones <- dplyr::filter(tasas_territorio, anio == a, categoria == cat, sexo == 'Varones')
+    v <- (i == 1)
+    p <- p %>%
+      plotly::add_segments(data = b, x = ~Varones, xend = ~Mujeres,
+                           y = ~nombre, yend = ~nombre,
+                           line = list(color = '#B8BEC8', width = 4),
+                           text = ~detalle, hoverinfo = 'text',
+                           visible = v, showlegend = FALSE, inherit = FALSE) %>%
+      plotly::add_trace(data = mujeres, x = ~tasa, y = ~nombre,
+                        type = 'scatter', mode = 'markers+text',
+                        text = ~etiqueta_tasa, textposition = 'top center',
+                        textfont = list(color = '#008C68', size = 10),
+                        marker = list(color = '#008C68', size = 11),
+                        hovertext = ~detalle, hoverinfo = 'text',
+                        visible = v, showlegend = FALSE, inherit = FALSE) %>%
+      plotly::add_trace(data = varones, x = ~tasa, y = ~nombre,
+                        type = 'scatter', mode = 'markers+text',
+                        text = ~etiqueta_tasa, textposition = 'bottom center',
+                        textfont = list(color = '#E66A19', size = 10),
+                        marker = list(color = '#E66A19', size = 11),
+                        hovertext = ~detalle, hoverinfo = 'text',
+                        visible = v, showlegend = FALSE, inherit = FALSE) %>%
+      plotly::add_trace(data = b, x = rep(posicion_brecha, nrow(b)), y = ~nombre,
+                        type = 'scatter', mode = 'text',
+                        text = ~etiqueta_brecha, textposition = 'middle left',
+                        textfont = list(color = '#333333', size = 11),
+                        hovertext = ~detalle, hoverinfo = 'text',
+                        visible = v, showlegend = FALSE, inherit = FALSE)
+  }
+  p %>% plotly::layout(
+    xaxis = list(range = c(0, limite), ticksuffix = '%', title = ''),
+    yaxis = list(categoryorder = 'array', categoryarray = rev(orden_territorios)),
+    showlegend = FALSE
+  )
+}
+
+# Una ocupación a la izquierda; pluriempleo a la derecha.
+# El eje de una ocupación llega a 125 para que la etiqueta de brecha
+# quede separada de los puntos (que rondan el 70-90 %).
+# La etiqueta de brecha termina en el borde derecho de cada panel.
+p_una <- crear_panel_brecha('Una ocupación', 125, 125)
+p_pluri <- crear_panel_brecha('Pluriempleo', 26, 26)
+
+# subplot concatena las 20 trazas del panel izquierdo y luego las 20 del derecho.
+# Un único botón activa las cuatro trazas del año elegido en AMBOS paneles.
+botones_brecha <- lapply(seq_along(anios_brecha), function(i) {
+  visibles <- rep(FALSE, 8 * length(anios_brecha))
+  indices <- ((i - 1) * 4 + 1):(i * 4)
+  visibles[indices] <- TRUE
+  visibles[4 * length(anios_brecha) + indices] <- TRUE
+  list(label = as.character(anios_brecha[i]), method = 'restyle',
+       args = list('visible', visibles))
+})
+
+grafico_brechas_dos <- plotly::subplot(
+  p_una, p_pluri, nrows = 1, widths = c(0.5, 0.5),
+  margin = 0.09, shareY = FALSE, titleX = FALSE, titleY = FALSE
+) %>%
+  plotly::layout(
+    xaxis = list(range = c(0, 125), tickvals = c(0, 25, 50, 75, 100),
+                 ticksuffix = '%', title = 'Una ocupación'),
+    xaxis2 = list(range = c(0, 26), ticksuffix = '%', title = 'Pluriempleo'),
+    yaxis = list(showticklabels = TRUE, side = 'left', categoryorder = 'array',
+                 categoryarray = rev(orden_territorios), fixedrange = TRUE),
+    yaxis2 = list(showticklabels = FALSE,
+                  categoryorder = 'array', categoryarray = rev(orden_territorios),
+                  fixedrange = TRUE),
+    updatemenus = list(list(type = 'dropdown', direction = 'down',
+                            x = 1, y = 1.19, xanchor = 'right', yanchor = 'top',
+                            active = 0, buttons = botones_brecha)),
+    margin = list(l = 165, r = 25, t = 70, b = 75),
+    height = 510, hovermode = 'closest', showlegend = FALSE
+  )
+# La altura de layout() no agranda el contenedor del HTML: sin esto,
+# el gráfico se desborda y tapa el texto que sigue.
+grafico_brechas_dos$height <- 510
+
+htmltools::tagList(
+  htmltools::tags$h3(
+    style = 'font-size:18px;margin:20px 0 5px;',
+    'Brecha de género por categoría ocupacional y aglomerado'
+  ),
+  htmltools::tags$p(
+    style = 'font-size:13px;color:#555;margin:0 0 8px;',
+    'Seleccioná un año para comparar las tasas de mujeres y varones en cada categoría ocupacional.'
+  ),
+  grafico_brechas_dos,
+  htmltools::tags$div(
+    style = 'display:flex;justify-content:center;gap:25px;font-size:12px;margin:2px 0 12px;',
+    htmltools::tags$span(htmltools::tags$span(style='display:inline-block;background:#008C68;width:11px;height:11px;border-radius:50%;margin-right:6px;'), 'Mujeres'),
+    htmltools::tags$span(htmltools::tags$span(style='display:inline-block;background:#E66A19;width:11px;height:11px;border-radius:50%;margin-right:6px;'), 'Varones')
+  ),
+  htmltools::tags$p(style = 'font-size:11px;color:#666;margin:0 0 16px;',
+    'Brecha = tasa de mujeres − tasa de varones (pp). Valores positivos indican mayor tasa femenina. ',
+    'Tasas calculadas sobre ocupados del mismo sexo y aglomerado. ',
+    'Poblaciones estimadas con PONDERA. Fuente: INDEC - EPH.')
+)
+```
+
+Para comparar las tasas entre mujeres y varones se calcula una brecha expresada en puntos porcentuales:
+
+**Brecha (pp) \= tasa de mujeres − tasa de varones.**
+
+Una **brecha positiva** indica mayor participación entre las mujeres ocupadas; una **negativa**, entre los varones.
+
+El cálculo se realiza de manera independiente para una ocupación y para pluriempleo, en cada aglomerado y año.
+
+El selector temporal permite examinar los cinco primeros trimestres incluidos en el estudio sin modificar los criterios de cálculo.
+
+En las estimaciones de 2026, por ejemplo, el pluriempleo presenta una tasa femenina superior a la masculina en Bahía Blanca-Cerri, CABA, Partidos del GBA y Mar del Plata-Batán. Gran La Plata constituye una excepción dentro de los cinco aglomerados, con una tasa masculina ligeramente superior.
+
+En la categoría de una ocupación se observa una relación diferente: las tasas masculinas superan a las femeninas en los aglomerados representados para ese año.
+
+También es importante evitar una interpretación automática de las brechas. Una diferencia positiva en pluriempleo no significa, por sí misma, una ventaja laboral para las mujeres. Del mismo modo, una mayor participación masculina en una ocupación no permite concluir que existan mejores condiciones de trabajo.
+
+Los indicadores describen la distribución de las personas según la cantidad de ocupaciones; no informan directamente sobre los ingresos, las horas trabajadas, la calidad del empleo ni los motivos para desempeñar varias actividades.
+
+## **7\. Conclusiones y nuevas preguntas**
+
+Una cuestión central es que **composición, evolución y brecha representan dimensiones diferentes**. La composición indica qué proporción ocupa cada categoría; la evolución muestra cómo cambia esa proporción en el tiempo; y la brecha compara las tasas de mujeres y varones dentro de una misma categoría y territorio.
+
+Por lo tanto, un aglomerado puede presentar una tasa elevada de pluriempleo y, al mismo tiempo, una brecha pequeña si mujeres y varones tienen participaciones semejantes. También puede ocurrir lo contrario: una tasa general relativamente baja puede coexistir con una diferencia considerable entre sexos.
+
+<!-- PENDIENTE: acá van los tres hallazgos principales, con números (la consigna los pide). -->
+
+El estudio no permite determinar las causas de estas diferencias. Sin embargo, abre nuevas líneas de investigación.
+
+Una primera posibilidad consiste en analizar **qué tipos de ocupaciones combinan las personas con pluriempleo**. Tener dos ocupaciones no necesariamente representa la misma situación para todos los trabajadores: pueden variar las actividades, la relación laboral, las horas dedicadas y las condiciones de remuneración.
+
+Otra línea de trabajo sería incorporar la **edad** y el **nivel educativo**, para explorar si la participación en cada categoría cambia entre generaciones o perfiles de formación.
+
+También resultaría relevante estudiar las horas trabajadas, los ingresos laborales y las características de las ocupaciones principales y secundarias, siempre que las variables disponibles permitan realizar comparaciones adecuadas.
+
+De este modo, el trabajo no busca cerrar la discusión sobre las diferencias ocupacionales entre mujeres y varones, sino ofrecer una primera descripción que permita formular preguntas más específicas sobre las distintas formas de participación en el mercado laboral.
+
+## **8\. Limitaciones del análisis**
+
+Los resultados deben interpretarse considerando algunas limitaciones metodológicas.
+
+En primer lugar, la definición de persona ocupada utilizada por la EPH incluye situaciones laborales muy heterogéneas. La condición de ocupación no distingue por sí sola la intensidad de la jornada, la estabilidad del vínculo laboral ni la suficiencia de los ingresos.
+
+En segundo lugar, la cantidad de ocupaciones no permite establecer las razones del pluriempleo. Una persona puede combinar actividades por necesidad económica, por organización profesional, por disponibilidad horaria o por otras circunstancias que no se identifican mediante los indicadores utilizados.
+
+En tercer lugar, la EPH es una encuesta por muestreo. Las estimaciones obtenidas mediante `PONDERA` representan población expandida, pero conservan incertidumbre estadística. Esta limitación adquiere especial importancia cuando se desagregan los datos por año, sexo, aglomerado y categoría, ya que algunos grupos pueden contener pocos casos muestrales. El presente análisis no incorpora intervalos de confianza ni pruebas de significación estadística.
+
+Además, la categoría sin clasificar debe mantenerse visible: su presencia limita la interpretación de la composición y hace necesario evitar que las diferencias entre una ocupación y pluriempleo se consideren una distribución exhaustiva de todos los ocupados clasificados.
+
+Finalmente, la cobertura comprende cinco aglomerados urbanos y un trimestre por año. En consecuencia, las conclusiones no deben extenderse automáticamente a toda la provincia de Buenos Aires, al país o al conjunto de cada año calendario.
+
+## **9\. Fuentes y referencias**
+
+**Instituto Nacional de Estadística y Censos (INDEC).** Encuesta Permanente de Hogares, microdatos individuales, primeros trimestres de 2022, 2023, 2024, 2025 y 2026\.
+
+**INDEC.** Documentación metodológica y diseños de registro de la Encuesta Permanente de Hogares.
+
+Sitio oficial: [https\://www\.indec.gob.ar/](https://www.indec.gob.ar/)
+
