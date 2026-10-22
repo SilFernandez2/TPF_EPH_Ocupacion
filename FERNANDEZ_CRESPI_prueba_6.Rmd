@@ -1,5 +1,5 @@
 ---
-title: "Ocupación y pluriempleo por sexo en cinco aglomerados de Buenos Aires"
+title: "Evolución de la ocupación por sexo en los aglomerados de Buenos Aires"
 subtitle: "Un análisis de la composición ocupacional, su evolución y las brechas entre mujeres y varones durante el primer trimestre de 2022–2026"
 author: "Silvia Fernández y María Sol Crespi"
 date: "`r Sys.Date()`"
@@ -33,9 +33,9 @@ actualizar_microdatos <- FALSE
 dir.create("salidas", showWarnings = FALSE)
 
 ruta_eph <- file.path("salidas", "eph_general.rds")
-if (!actualizar_microdatos && file.exists(ruta_eph)) {   # <- esto te faltaba
-  eph_general <- readRDS(ruta_eph)                       # <- y esto
-} else {                                                 # <- el else va pegado a la }
+if (!actualizar_microdatos && file.exists(ruta_eph)) {
+  eph_general <- readRDS(ruta_eph)
+} else {
   eph_general <- dplyr::bind_rows(lapply(2022:2026, function(anio) {
     message('Descargando EPH: primer trimestre ', anio)
     tryCatch(
@@ -171,7 +171,7 @@ En Argentina, la Encuesta Permanente de Hogares (EPH), elaborada por el Institut
 
 Este informe propone explorar la composición de la población ocupada según la cantidad de ocupaciones que desempeña, incorporando dos dimensiones de análisis: el sexo y el territorio.
 
-La pregunta inicial que orienta el trabajo es:
+Para iniciar nuestro análisis, introducimos la pregunta disparadora:
 
 **¿Cómo se distribuye y evoluciona la población ocupada según la cantidad de ocupaciones y el sexo, y en qué medida estas diferencias se reproducen entre los principales aglomerados urbanos de Buenos Aires?**
 
@@ -187,15 +187,15 @@ La selección de un mismo trimestre busca mejorar la comparabilidad temporal, ev
 
 El análisis comprende cinco aglomerados urbanos:
 
-* Ciudad Autónoma de Buenos Aires (CABA).
-* Partidos del Gran Buenos Aires.
-* Gran La Plata.
-* Bahía Blanca-Cerri.
+* Ciudad Autónoma de Buenos Aires (CABA).  
+* Partidos del Gran Buenos Aires.  
+* Gran La Plata.  
+* Bahía Blanca-Cerri.  
 * Mar del Plata-Batán.
 
 Estos territorios permiten observar diferentes realidades urbanas dentro de Buenos Aires, aunque no constituyen la totalidad de la provincia ni representan por sí solos al conjunto del país.
 
-La unidad de observación es la persona relevada por la encuesta. Para este trabajo, el universo principal está integrado por las personas clasificadas como **ocupadas**, según la definición operativa de la EPH.
+La unidad de observación es la persona relevada por la encuesta. Para este trabajo, el universo principal está integrado por las personas clasificadas como **ocupadas**, según la definición operativa de la EPH (ver Fuente y Referencias, *Documentación Encuesta Permanente de Hogares*).
 
 ## **3\. Universos, variables e indicadores**
 
@@ -217,7 +217,7 @@ Para estimar la cantidad de personas representadas por los registros muestrales 
 
 La proporción de cada categoría ocupacional se calcula como:
 
-**Tasa de la categoría (%) \= población estimada de la categoría / población ocupada estimada del mismo sexo × 100\.**
+**Tasa de la categoría (%) \= (población estimada de la categoría / población ocupada estimada del mismo sexo) × 100\.**
 
 En los resultados por aglomerado, tanto el numerador como el denominador corresponden al mismo territorio. Para el agregado de los cinco aglomerados, las tasas se obtienen a partir de las poblaciones estimadas y no del promedio simple de los porcentajes territoriales.
 
@@ -391,11 +391,9 @@ En ambos casos, la comparación por sexo aporta información adicional. No solo 
 
 La lectura conjunta requiere una precaución: como las categorías tienen magnitudes muy diferentes, cada gráfico utiliza una escala vertical apropiada. Por ello, la inclinación visual de las líneas no debe utilizarse para comparar directamente la intensidad de los cambios entre ambas categorías. Para hacerlo, corresponde observar las variaciones en puntos porcentuales.
 
-Los resultados agregados permiten describir una tendencia general para los cinco aglomerados considerados. Sin embargo, esa tendencia podría no reproducirse de manera uniforme en todos los territorios.
+Los resultados agregados permiten describir una tendencia general para los cinco aglomerados considerados. Sin embargo, esa tendencia podría no reproducirse de manera uniforme en todos los territorios, esto nos conduce a plantearnos las siguientes preguntas:
 
 **¿El comportamiento del pluriempleo y de la ocupación única es semejante en CABA, el Gran Buenos Aires, Gran La Plata, Bahía Blanca-Cerri y Mar del Plata-Batán? ¿Las diferencias entre mujeres y varones mantienen la misma dirección en cada aglomerado?**
-
-Estas preguntas motivan la incorporación de una medida específica de brecha.
 
 ## **6\. Brechas por sexo y diferencias territoriales**
 
@@ -565,11 +563,17 @@ htmltools::tagList(
 
 Para comparar las tasas entre mujeres y varones se calcula una brecha expresada en puntos porcentuales:
 
-**Brecha (pp) \= tasa de mujeres − tasa de varones.**
+**Brecha de género (pp) \= tasa de mujeres(%) − tasa de varones(%).**
 
-Una **brecha positiva** indica mayor participación entre las mujeres ocupadas; una **negativa**, entre los varones.
+La interpretación del signo:
+
+* Una **brecha positiva** indica que la categoría tiene mayor participación entre las mujeres ocupadas.  
+* Una **brecha negativa** indica que la participación es mayor entre los varones ocupados.  
+* Una **brecha cercana a cero** indica tasas similares entre ambos grupos.
 
 El cálculo se realiza de manera independiente para una ocupación y para pluriempleo, en cada aglomerado y año.
+
+La tercera visualización presenta las tasas de ambos sexos mediante puntos conectados por una línea. La distancia horizontal entre los puntos representa la magnitud de la brecha, mientras que su orientación permite identificar qué sexo presenta la tasa mayor.
 
 El selector temporal permite examinar los cinco primeros trimestres incluidos en el estudio sin modificar los criterios de cálculo.
 
@@ -577,27 +581,27 @@ En las estimaciones de 2026, por ejemplo, el pluriempleo presenta una tasa femen
 
 En la categoría de una ocupación se observa una relación diferente: las tasas masculinas superan a las femeninas en los aglomerados representados para ese año.
 
+Estas diferencias marcan por qué resulta útil incorporar una perspectiva territorial. Una tasa agregada puede resumir el comportamiento de la población considerada, pero no necesariamente describir de manera adecuada lo que ocurre en cada aglomerado.
+
 También es importante evitar una interpretación automática de las brechas. Una diferencia positiva en pluriempleo no significa, por sí misma, una ventaja laboral para las mujeres. Del mismo modo, una mayor participación masculina en una ocupación no permite concluir que existan mejores condiciones de trabajo.
 
 Los indicadores describen la distribución de las personas según la cantidad de ocupaciones; no informan directamente sobre los ingresos, las horas trabajadas, la calidad del empleo ni los motivos para desempeñar varias actividades.
 
-## **7\. Conclusiones y nuevas preguntas**
+## **7\. Interpretación integrada**
+
+Las tres visualizaciones permiten avanzar desde una descripción general hacia una comparación más específica.
+
+La composición ocupacional muestra que una ocupación constituye la situación mayoritaria, pero también que las participaciones difieren según el sexo.
+
+Los gráficos de evolución incorporan la dimensión temporal y permiten observar si estas diferencias se mantienen o cambian entre 2022 y 2026\.
+
+Finalmente, el análisis de brechas por aglomerado permite comprobar que la relación entre mujeres y varones no debe suponerse homogénea entre territorios.
 
 Una cuestión central es que **composición, evolución y brecha representan dimensiones diferentes**. La composición indica qué proporción ocupa cada categoría; la evolución muestra cómo cambia esa proporción en el tiempo; y la brecha compara las tasas de mujeres y varones dentro de una misma categoría y territorio.
 
 Por lo tanto, un aglomerado puede presentar una tasa elevada de pluriempleo y, al mismo tiempo, una brecha pequeña si mujeres y varones tienen participaciones semejantes. También puede ocurrir lo contrario: una tasa general relativamente baja puede coexistir con una diferencia considerable entre sexos.
 
-<!-- PENDIENTE: acá van los tres hallazgos principales, con números (la consigna los pide). -->
-
-El estudio no permite determinar las causas de estas diferencias. Sin embargo, abre nuevas líneas de investigación.
-
-Una primera posibilidad consiste en analizar **qué tipos de ocupaciones combinan las personas con pluriempleo**. Tener dos ocupaciones no necesariamente representa la misma situación para todos los trabajadores: pueden variar las actividades, la relación laboral, las horas dedicadas y las condiciones de remuneración.
-
-Otra línea de trabajo sería incorporar la **edad** y el **nivel educativo**, para explorar si la participación en cada categoría cambia entre generaciones o perfiles de formación.
-
-También resultaría relevante estudiar las horas trabajadas, los ingresos laborales y las características de las ocupaciones principales y secundarias, siempre que las variables disponibles permitan realizar comparaciones adecuadas.
-
-De este modo, el trabajo no busca cerrar la discusión sobre las diferencias ocupacionales entre mujeres y varones, sino ofrecer una primera descripción que permita formular preguntas más específicas sobre las distintas formas de participación en el mercado laboral.
+La combinación de estas perspectivas permite evitar conclusiones basadas en un único indicador.
 
 ## **8\. Limitaciones del análisis**
 
@@ -613,11 +617,30 @@ Además, la categoría sin clasificar debe mantenerse visible: su presencia limi
 
 Finalmente, la cobertura comprende cinco aglomerados urbanos y un trimestre por año. En consecuencia, las conclusiones no deben extenderse automáticamente a toda la provincia de Buenos Aires, al país o al conjunto de cada año calendario.
 
-## **9\. Fuentes y referencias**
+## **9\. Conclusiones y nuevas preguntas**
+
+El análisis permitió identificar diferencias en la composición ocupacional de mujeres y varones, observar su evolución entre 2022 y 2026 y examinar cómo estas diferencias se manifiestan en cinco aglomerados urbanos.
+
+La ocupación única predomina durante el período, mientras que el pluriempleo constituye una categoría de menor participación, pero con variaciones que justifican su estudio específico.
+
+La incorporación de brechas por sexo permite ampliar la interpretación de los porcentajes: no solo muestra cuánto representa cada categoría, sino también cómo difiere su presencia entre mujeres y varones. La comparación territorial agrega una dimensión relevante al evidenciar que las relaciones observadas en el agregado pueden presentar particularidades locales.
+
+El estudio no permite determinar las causas de estas diferencias. Sin embargo, abre nuevas líneas de investigación.
+
+Una primera posibilidad consiste en analizar **qué tipos de ocupaciones combinan las personas con pluriempleo**. Tener dos ocupaciones no necesariamente representa la misma situación para todos los trabajadores: pueden variar las actividades, la relación laboral, las horas dedicadas y las condiciones de remuneración.
+
+Otra línea de trabajo sería incorporar la **edad** y el **nivel educativo**, para explorar si la participación en cada categoría cambia entre generaciones o perfiles de formación.
+
+También resultaría relevante estudiar las horas trabajadas, los ingresos laborales y las características de las ocupaciones principales y secundarias, siempre que las variables disponibles permitan realizar comparaciones adecuadas.
+
+De este modo, el trabajo no busca cerrar la discusión sobre las diferencias ocupacionales entre mujeres y varones, sino ofrecer una primera descripción que permita formular preguntas más específicas sobre las distintas formas de participación en el mercado laboral.
+
+## **10\. Fuentes y referencias**
 
 **Instituto Nacional de Estadística y Censos (INDEC).** Encuesta Permanente de Hogares, microdatos individuales, primeros trimestres de 2022, 2023, 2024, 2025 y 2026\.
 
-**INDEC.** Documentación metodológica y diseños de registro de la Encuesta Permanente de Hogares.
+**INDEC.** Documentación metodológica y diseños de registro de la Encuesta Permanente de Hogares.-  [EPH\_Registro\_](https://www.indec.gob.ar/ftp/cuadros/menusuperior/eph/EPH_registro_1T2026.pdf)
 
 Sitio oficial: [https\://www\.indec.gob.ar/](https://www.indec.gob.ar/)
 
+**Elaboración propia.** Procesamiento de microdatos y construcción de indicadores ponderados mediante R; visualizaciones elaboradas con ggplot2 y Plotly.
